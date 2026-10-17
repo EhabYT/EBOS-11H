@@ -1,0 +1,905 @@
+---
+privilege: TrustedInstaller
+actions:
+  - !writeStatus: {status: "Configuring Shell"}
+
+  - !powerShell:
+    exeDir: true
+    wait: true
+    errorAction: Ignore
+    command: |
+      # The triple-quote form reached PowerShell literally, so the destination was a
+      # path wrapped in quote characters. Join-Path with plain single quotes has no
+      # such ambiguity and survives AME's parser unchanged.
+      $ebosDir = Join-Path $env:windir 'EBOS'
+      New-Item -ItemType Directory -Path $ebosDir -Force -ErrorAction SilentlyContinue | Out-Null
+      $notes = New-Object System.Collections.ArrayList
+      foreach ($ico in @('ebos.ico','discord.ico')) {
+        $src = Join-Path $PWD $ico
+        $dst = Join-Path $ebosDir $ico
+        if (Test-Path $src) {
+          try { Copy-Item -Path $src -Destination $dst -Force -ErrorAction Stop } catch {}
+        }
+        if (Test-Path $dst) { [void]$notes.Add('  icon ok: ' + $dst + '  ' + (Get-Item $dst).Length + ' bytes') }
+        else { [void]$notes.Add('  ICON MISSING: ' + $dst) }
+      }
+      # The shortcuts point at these icons, so a standard user has to be able to read
+      # them or the desktop shows a blank tile. Granted explicitly rather than relying
+      # on whatever the folder inherited while running as TrustedInstaller.
+      try { & icacls $ebosDir /grant '*S-1-5-32-545:(OI)(CI)RX' /T /C | Out-Null } catch {}
+      $publicDesktop = Join-Path $env:PUBLIC 'Desktop'
+      New-Item -ItemType Directory -Path $publicDesktop -Force -ErrorAction SilentlyContinue | Out-Null
+      $dcIcon = Join-Path $ebosDir 'discord.ico'
+      # .lnk, not .url: Windows 10 does not render a custom IconFile on an InternetShortcut
+      # (.url) - the tile came up blank - while a .lnk with an explicit IconLocation renders
+      # on both 10 and 11. explorer.exe is the target with the URL as its argument, so a
+      # double-click hands the address to the default browser via ShellExecute.
+      $explorer = Join-Path $env:windir 'explorer.exe'
+      $shortcuts = @(
+        @{ n = 'EBOS Discord.lnk';         url = 'https://discord.gg/9cHp2Jwq4b';     ico = $dcIcon; desc = 'EBOS Discord' }
+      )
+      $fresh = $true
+      try {
+        $stampKey = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SOFTWARE\EBOS\EBOS')
+        if (-not $stampKey) { $stampKey = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SOFTWARE\EBOS\EBOS-X') }
+        if ($stampKey) {
+          if ($stampKey.GetValue('Installed') -eq 1) { $fresh = $false }
+          $stampKey.Close()
+        }
+      } catch {}
+      if ($fresh) {
+        $wsh = New-Object -ComObject WScript.Shell
+        foreach ($s in $shortcuts) {
+          $t = Join-Path $publicDesktop $s.n
+          # Remove any stale .url of the same name from an earlier build so the desktop
+          # does not end up carrying both.
+          $oldUrl = Join-Path $publicDesktop ([System.IO.Path]::ChangeExtension($s.n, '.url'))
+          if (Test-Path $oldUrl) { Remove-Item -Path $oldUrl -Force -ErrorAction SilentlyContinue }
+          if (Test-Path $t) { Remove-Item -Path $t -Force -ErrorAction SilentlyContinue }
+          try {
+            $sc = $wsh.CreateShortcut($t)
+            $sc.TargetPath = $explorer
+            $sc.Arguments = $s.url
+            $sc.IconLocation = $s.ico + ',0'
+            $sc.Description = $s.desc
+            $sc.Save()
+          } catch {}
+          if (Test-Path $t) { [void]$notes.Add('  shortcut ok: ' + $t + '  ' + (Get-Item $t).Length + ' bytes') }
+          else { [void]$notes.Add('  SHORTCUT MISSING: ' + $t) }
+        }
+      } else {
+        [void]$notes.Add('  upgrade detected - desktop shortcuts not re-added')
+      }
+      try {
+        $o = @((Get-Date -Format s) + ' - desktop shortcuts')
+        $o += $notes
+        $o | Out-File -FilePath (Join-Path $ebosDir 'desktop-shortcuts.txt') -Append -Encoding utf8
+      } catch {}
+      $global:LASTEXITCODE = 0
+
+  - !powerShell:
+    option: "fs-wallpaper"
+    exeDir: true
+    wait: true
+    errorAction: Ignore
+    command: |
+      $dest = Join-Path $env:windir 'Web\Wallpaper\EBOS'
+      New-Item -ItemType Directory -Path $dest -Force -ErrorAction SilentlyContinue | Out-Null
+      $wp = Join-Path $PWD 'wallpaper.png'
+      $ls = Join-Path $PWD 'lockscreen.png'
+      if (Test-Path $wp) { Copy-Item -Path $wp -Destination (Join-Path $dest 'wallpaper.png') -Force -ErrorAction SilentlyContinue }
+      if (Test-Path $ls) { Copy-Item -Path $ls -Destination (Join-Path $dest 'lockscreen.png') -Force -ErrorAction SilentlyContinue }
+      $global:LASTEXITCODE = 0
+
+
+  # --- EBOS cursor scheme ------------------------------------------
+  - !powerShell:
+    exeDir: true
+    wait: true
+    errorAction: Ignore
+    command: |
+      $dest = Join-Path $env:windir 'Cursors\EBOS'
+      New-Item -ItemType Directory -Path $dest -Force -ErrorAction SilentlyContinue | Out-Null
+      $src = Join-Path $PWD 'cursors'
+      if (Test-Path $src) {
+        Copy-Item -Path (Join-Path $src '*') -Destination $dest -Recurse -Force -ErrorAction SilentlyContinue
+      }
+      # Legacy cursor names left by older builds: ebos-*-fire-hq-256.ani (oldest),
+      # ebos-*-fire-hq.ani and ebos-*-hq.ani (r11 previews). This build ships
+      # ebos-*.ani, so once the full new set is on disk (17 files - any legacy
+      # name containing 'hq' is excluded from the count because the new names
+      # never contain it), drop the orphaned old sets so a failed copy can never
+      # leave the folder empty.
+      $fresh = @(Get-ChildItem -LiteralPath $dest -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'ebos-*.ani' -and $_.Name -notlike '*hq*' }).Count
+      if ($fresh -ge 17) {
+        Get-ChildItem -LiteralPath $dest -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'ebos-*-hq*' } | Remove-Item -Force -ErrorAction SilentlyContinue
+      }
+      $map = @{'Arrow'='ebos-arrow.ani';'Help'='ebos-help.ani';'AppStarting'='ebos-appstarting.ani';'Wait'='ebos-wait.ani';'Crosshair'='ebos-cross.ani';'IBeam'='ebos-ibeam.ani';'NWPen'='ebos-pen.ani';'No'='ebos-no.ani';'SizeNS'='ebos-sizens.ani';'SizeWE'='ebos-sizewe.ani';'SizeNWSE'='ebos-sizenwse.ani';'SizeNESW'='ebos-sizenesw.ani';'SizeAll'='ebos-sizeall.ani';'UpArrow'='ebos-up.ani';'Hand'='ebos-hand.ani';'Pin'='ebos-pin.ani';'Person'='ebos-person.ani'}
+      $order = @('Arrow','Help','AppStarting','Wait','Crosshair','IBeam','NWPen','No','SizeNS','SizeWE','SizeNWSE','SizeNESW','SizeAll','UpArrow','Hand','Pin','Person')
+      $scheme = ($order | ForEach-Object { '%SystemRoot%\Cursors\EBOS\' + $map[$_] }) -join ','
+      $hives = @('Registry::HKU\.DEFAULT')
+      Get-ChildItem 'Registry::HKU' | Where-Object { $_.PSChildName -match '^S-1-5-21-' -and $_.PSChildName -notlike '*_Classes' } | ForEach-Object {
+        $hives += 'Registry::' + $_.Name
+      }
+      foreach ($h in $hives) {
+        $ck = Join-Path $h 'Control Panel\Cursors'
+        $sk = Join-Path $ck 'Schemes'
+        New-Item -Path $ck -Force -ErrorAction SilentlyContinue | Out-Null
+        New-Item -Path $sk -Force -ErrorAction SilentlyContinue | Out-Null
+        foreach ($role in $order) {
+          try { Set-ItemProperty -Path $ck -Name $role -Value ('%SystemRoot%\Cursors\EBOS\' + $map[$role]) -Type ExpandString -Force -ErrorAction SilentlyContinue } catch {}
+        }
+        try { Set-ItemProperty -Path $ck -Name '(Default)' -Value 'EBOS' -Type String -Force -ErrorAction SilentlyContinue } catch {}
+        try { Set-ItemProperty -Path $ck -Name 'Scheme Source' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue } catch {}
+        # Pin the rendered size. Windows keeps CursorBaseSize from whatever
+        # scheme was installed before; the playbook never set it, so an
+        # inherited value made these cursors appear at the wrong size even
+        # though the files are correct. 32 is the Windows default, and the
+        # .cur files carry 32/48/64/96/128 so any DPI gets a crisp frame.
+        try { Set-ItemProperty -Path $ck -Name 'CursorBaseSize' -Value 32 -Type DWord -Force -ErrorAction SilentlyContinue } catch {}
+        try { Set-ItemProperty -Path $sk -Name 'EBOS' -Value $scheme -Type ExpandString -Force -ErrorAction SilentlyContinue } catch {}
+      }
+      $sig = '[DllImport("user32.dll", SetLastError=true)] public static extern bool SystemParametersInfo(uint a, uint b, IntPtr c, uint d);'
+      try {
+        $t = Add-Type -MemberDefinition $sig -Name 'EbosCur' -Namespace 'Ebos' -PassThru -ErrorAction SilentlyContinue
+        [void]$t::SystemParametersInfo(0x0057, 0, [IntPtr]::Zero, 0x02)
+      } catch {}
+      $global:LASTEXITCODE = 0
+
+  - !registryValue: {path: 'HKU\.DEFAULT\Control Panel\Desktop', value: 'JPEGImportQuality', type: REG_DWORD, data: '100'}
+  - !powerShell:
+      wait: true
+      errorAction: Ignore
+      command: |
+        Get-ChildItem 'Registry::HKU' | Where-Object { $_.PSChildName -match '^S-1-5-21-' -and $_.PSChildName -notlike '*_Classes' } | ForEach-Object {
+          $k = 'Registry::' + $_.Name + '\Control Panel\Desktop'
+          if (Test-Path $k) {
+            try { Set-ItemProperty -Path $k -Name 'JPEGImportQuality' -Value 100 -Type DWord -Force -ErrorAction SilentlyContinue } catch {}
+          }
+        }
+        $global:LASTEXITCODE = 0
+  - !powerShell:
+    option: "fs-wallpaper"
+    wait: true
+    errorAction: Ignore
+    command: |
+      $deskKey = 'Registry::HKU\.DEFAULT\Control Panel\Desktop'
+      New-Item -Path $deskKey -Force -ErrorAction SilentlyContinue | Out-Null
+      Set-ItemProperty -Path $deskKey -Name 'Wallpaper' -Value '%SystemRoot%\Web\Wallpaper\EBOS\wallpaper.png' -Type String -Force -ErrorAction SilentlyContinue
+      Set-ItemProperty -Path $deskKey -Name 'WallpaperStyle' -Value '10' -Type String -Force -ErrorAction SilentlyContinue
+      Set-ItemProperty -Path $deskKey -Name 'TileWallpaper' -Value '0' -Type String -Force -ErrorAction SilentlyContinue
+      $persKey = 'Registry::HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization'
+      New-Item -Path $persKey -Force -ErrorAction SilentlyContinue | Out-Null
+      Set-ItemProperty -Path $persKey -Name 'LockScreenImagePath' -Value '%SystemRoot%\Web\Wallpaper\EBOS\lockscreen.png' -Type String -Force -ErrorAction SilentlyContinue
+      Set-ItemProperty -Path $persKey -Name 'LockScreenImageUrl' -Value '%SystemRoot%\Web\Wallpaper\EBOS\lockscreen.png' -Type String -Force -ErrorAction SilentlyContinue
+      $global:LASTEXITCODE = 0
+
+  - !powerShell:
+    wait: true
+    errorAction: Ignore
+    command: |
+      $marker = Join-Path $env:windir 'EBOS\.personalization-applied'
+      if (Test-Path $marker) { $global:LASTEXITCODE = 0; return }
+      $opts = @()
+      $optsFile = Join-Path $env:windir 'EBOS\ebos-options.txt'
+      if (Test-Path $optsFile) { $opts = Get-Content $optsFile -ErrorAction SilentlyContinue }
+      $userHives = @('Registry::HKU\.DEFAULT')
+      if (Test-Path 'Registry::HKEY_USERS\AME_UserHive_Default') { $userHives += 'Registry::HKEY_USERS\AME_UserHive_Default' }
+      Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^S-1-5-21-' -and $_.PSChildName -notmatch '_Classes$' } | ForEach-Object { $userHives += ('Registry::HKEY_USERS\' + $_.PSChildName) }
+      $pinPaths = @()
+      foreach ($h in $userHives) { $pinPaths += ($h + '\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband\AuxilliaryPins') }
+      foreach ($p in $pinPaths) {
+        if (-not (Test-Path $p)) { New-Item -Path $p -Force -ErrorAction SilentlyContinue | Out-Null }
+      }
+      $bothHives = @(
+        'TaskViewPin','OutlookWebPin','WidgetsPin','ChatPin','MailPin','OutlookPin','CopilotPin'
+      )
+      $hkcuOnly = @(
+        'CopilotPWAPin','LinkedInPin','DevHomePin','NotepadPin','PhotosPin','GetStartedPin','SettingsPin','SnippingToolPin'
+      )
+      foreach ($p in $pinPaths) {
+        foreach ($n in ($bothHives + $hkcuOnly)) {
+          Set-ItemProperty -Path $p -Name $n -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+        }
+      }
+      if ($opts -contains 'remove-xbox') {
+        foreach ($p in $pinPaths) { Set-ItemProperty -Path $p -Name 'XboxPin' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue }
+      }
+      if ($opts -contains 'remove-store') {
+        foreach ($p in $pinPaths) { Set-ItemProperty -Path $p -Name 'StorePin' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue }
+      }
+      if ($opts -contains 'remove-edge') {
+        foreach ($p in $pinPaths) { Set-ItemProperty -Path $p -Name 'EdgePin' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue }
+      }
+      $global:LASTEXITCODE = 0
+
+  - !registryValue: {path: 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\ImmersiveShell', value: 'SignInMode', type: REG_DWORD, data: '1'}
+  - !registryValue: {path: 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Device', value: 'DevicePasswordLessBuildVersion', type: REG_DWORD, data: '2'}
+  - !registryValue: {path: 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\ImmersiveShell', value: 'TabletMode', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer', value: 'DisableEdgeDesktopShortcutCreation', type: REG_DWORD, data: '1', option: "remove-edge"}
+  - !registryValue: {path: 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer', value: 'ShowRecommendations', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer', value: 'EnablePrelaunch', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance', value: 'MaintenanceDisabled', type: REG_DWORD, data: '1'}
+
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'Start_ShowFrequentList', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\System\GameConfigStore', value: 'GameDVR_Enabled', type: REG_DWORD, data: '0', option: "remove-xbox"}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR', value: 'AppCaptureEnabled', type: REG_DWORD, data: '0', option: "remove-xbox"}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'Start_AccountNotifications', type: REG_DWORD, data: '0'}
+  - !powerShell:
+    wait: true
+    errorAction: Ignore
+    command: |
+      $marker = Join-Path $env:windir 'EBOS\.personalization-applied'
+      if (Test-Path $marker) { $global:LASTEXITCODE = 0; return }
+      $userHives = @('Registry::HKU\.DEFAULT')
+      if (Test-Path 'Registry::HKEY_USERS\AME_UserHive_Default') { $userHives += 'Registry::HKEY_USERS\AME_UserHive_Default' }
+      Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^S-1-5-21-' -and $_.PSChildName -notmatch '_Classes$' } | ForEach-Object { $userHives += ('Registry::HKEY_USERS\' + $_.PSChildName) }
+      foreach ($h in $userHives) {
+        $accent = $h + '\Software\Microsoft\Windows\CurrentVersion\Explorer\Accent'
+        if (-not (Test-Path $accent)) { New-Item -Path $accent -Force -ErrorAction SilentlyContinue | Out-Null }
+        Set-ItemProperty -Path $accent -Name 'StartColorMenu' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+      }
+      $global:LASTEXITCODE = 0
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'EnableSnapAssistFlyoutOnHover', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'EnableSnapAssistFlyout', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\SmartActionPlatform\ActionManager\Installed\System.DescribeImage', value: 'Enabled', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\SOFTWARE\Microsoft\TabletTip\1.7', value: 'EnableAutocorrection', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'Start_ShowRecentList', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'SnapAssist', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'MultiTaskingAltTabFilter', type: REG_DWORD, data: '3'}
+  - !registryValue: {path: 'HKCU\Control Panel\UnsupportedHardwareNotificationCache', value: 'SV2', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'SnapFill', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\PushNotifications', value: 'ToastEnabled', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\GameBar', value: 'UseNexusForGameBarEnabled', type: REG_DWORD, data: '0', option: "remove-xbox"}
+  - !registryValue: {path: 'HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell', value: 'FolderType', type: REG_SZ, data: 'NotSpecified'}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'EnableSnapBar', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\SOFTWARE\Microsoft\TabletTip\1.7', value: 'EnableSpellchecking', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'JointResize', type: REG_DWORD, data: '0'}
+
+  - !powerShell:
+    option: "fs-darkmode"
+    wait: true
+    errorAction: Ignore
+    command: |
+      $marker = Join-Path $env:windir 'EBOS\.personalization-applied'
+      if (Test-Path $marker) { $global:LASTEXITCODE = 0; return }
+      $userHives = @('Registry::HKU\.DEFAULT')
+      if (Test-Path 'Registry::HKEY_USERS\AME_UserHive_Default') { $userHives += 'Registry::HKEY_USERS\AME_UserHive_Default' }
+      Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^S-1-5-21-' -and $_.PSChildName -notmatch '_Classes$' } | ForEach-Object { $userHives += ('Registry::HKEY_USERS\' + $_.PSChildName) }
+      $themePaths = @()
+      foreach ($h in $userHives) { $themePaths += ($h + '\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize') }
+      foreach ($p in $themePaths) {
+        if (-not (Test-Path $p)) { New-Item -Path $p -Force -ErrorAction SilentlyContinue | Out-Null }
+        Set-ItemProperty -Path $p -Name 'SystemUsesLightTheme' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $p -Name 'AppsUseLightTheme' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $p -Name 'ColorPrevalence' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+      }
+      $global:LASTEXITCODE = 0
+
+  - !powerShell:
+      option: "fs-darkmode"
+      exeDir: true
+      wait: true
+      errorAction: Ignore
+      command: '.\apply-darkmode.ps1'
+
+  - !powerShell:
+    wait: true
+    errorAction: Ignore
+    command: |
+      $marker = Join-Path $env:windir 'EBOS\.personalization-applied'
+      if (Test-Path $marker) { $global:LASTEXITCODE = 0; return }
+      $sids = @('.DEFAULT')
+      try {
+        $sids += (Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue |
+          Where-Object { $_.PSChildName -match '^S-1-5-21-' -and $_.PSChildName -notmatch '_Classes$' } |
+          ForEach-Object { $_.PSChildName })
+      } catch {}
+      foreach ($sid in $sids) {
+        $key = 'Registry::HKEY_USERS\' + $sid + '\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+        if (-not (Test-Path $key)) { New-Item -Path $key -Force -ErrorAction SilentlyContinue | Out-Null }
+        Set-ItemProperty -Path $key -Name 'EnableTransparency' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+      }
+      $global:LASTEXITCODE = 0
+
+  - !powerShell:
+    option: "fs-notransparency"
+    wait: true
+    errorAction: Ignore
+    command: |
+      $sids = @('.DEFAULT')
+      try {
+        $sids += (Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue |
+          Where-Object { $_.PSChildName -match '^S-1-5-21-' -and $_.PSChildName -notmatch '_Classes$' } |
+          ForEach-Object { $_.PSChildName })
+      } catch {}
+      foreach ($sid in $sids) {
+        $key = 'Registry::HKEY_USERS\' + $sid + '\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+        if (-not (Test-Path $key)) { New-Item -Path $key -Force -ErrorAction SilentlyContinue | Out-Null }
+        Set-ItemProperty -Path $key -Name 'EnableTransparency' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+      }
+      $global:LASTEXITCODE = 0
+
+  - !powerShell:
+    option: "fs-wallpaper"
+    command: '.\\set-wallpaper.ps1 -Mode Desktop -ImagePath $env:systemroot\Web\Wallpaper\EBOS\wallpaper.png'
+    exeDir: true
+    runas: currentUserElevated
+    wait: true
+    weight: 40
+  - !powerShell:
+    option: "fs-wallpaper"
+    command: '.\\set-wallpaper.ps1 -Mode LockScreen -ImagePath $env:systemroot\Web\Wallpaper\EBOS\lockscreen.png'
+    exeDir: true
+    runas: currentUserElevated
+    wait: true
+    weight: 40
+
+  - !registryValue: {path: 'HKLM\SOFTWARE\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32', value: '', type: REG_SZ, data: '', option: "fs-w10-context"}
+  - !registryValue: {path: 'HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32', value: '', type: REG_SZ, data: '', option: "fs-w10-context"}
+
+  - !powerShell:
+    wait: true
+    errorAction: Ignore
+    command: |
+      $marker = Join-Path $env:windir 'EBOS\.personalization-applied'
+      if (Test-Path $marker) { $global:LASTEXITCODE = 0; return }
+      $ifeoRoot = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options'
+      foreach ($exe in @('StartMenuExperienceHost.exe','SearchHost.exe')) {
+        $p = Join-Path $ifeoRoot $exe
+        if (-not (Test-Path $p)) { New-Item -Path $p -Force -ErrorAction SilentlyContinue | Out-Null }
+        Set-ItemProperty -Path $p -Name 'Debugger' -Value '%SystemRoot%\System32\taskkill.exe' -Type String -Force -ErrorAction SilentlyContinue
+      }
+      Get-Process -Name 'StartMenuExperienceHost' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+      Get-Process -Name 'SearchHost' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+      Start-Sleep -Milliseconds 600
+      foreach ($exe in @('StartMenuExperienceHost.exe','SearchHost.exe')) {
+        $p = Join-Path $ifeoRoot $exe
+        Remove-ItemProperty -Path $p -Name 'Debugger' -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue
+      }
+      $global:LASTEXITCODE = 0
+  - !appx: {operation: clearCache, name: '*MicrosoftWindows.Client.CBS*'}
+
+  - !writeStatus: {status: "Cleaning Start and Taskbar"}
+
+  - !powerShell:
+    wait: true
+    errorAction: Ignore
+    command: |
+      $marker = Join-Path $env:windir 'EBOS\.personalization-applied'
+      if (Test-Path $marker) { $global:LASTEXITCODE = 0; return }
+      Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3' -Name 'Settings' -Force -ErrorAction SilentlyContinue
+      Remove-ItemProperty -Path 'Registry::HKU\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3' -Name 'Settings' -Force -ErrorAction SilentlyContinue
+      $advRoots = @('Registry::HKEY_USERS\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced')
+      if (Test-Path 'Registry::HKEY_USERS\AME_UserHive_Default') { $advRoots += 'Registry::HKEY_USERS\AME_UserHive_Default\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' }
+      Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^S-1-5-21-' -and $_.PSChildName -notmatch '_Classes$' } | ForEach-Object { $advRoots += ('Registry::HKEY_USERS\' + $_.PSChildName + '\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced') }
+      foreach ($p in $advRoots) {
+        if (-not (Test-Path $p)) { New-Item -Path $p -Force -ErrorAction SilentlyContinue | Out-Null }
+        Set-ItemProperty -Path $p -Name 'ShowTaskViewButton' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $p -Name 'Start_TrackDocs' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $p -Name 'Start_IrisRecommendations' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $p -Name 'Start_TrackProgs' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $p -Name 'Start_Layout' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+      }
+      $polExp = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer'
+      if (-not (Test-Path $polExp)) { New-Item -Path $polExp -Force -ErrorAction SilentlyContinue | Out-Null }
+      Set-ItemProperty -Path $polExp -Name 'HideTaskViewButton' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+      Set-ItemProperty -Path $polExp -Name 'ShowOrHideMostUsedApps' -Value 2 -Type DWord -Force -ErrorAction SilentlyContinue
+      Set-ItemProperty -Path $polExp -Name 'HideRecommendedPersonalizedSites' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+      $pmEdu = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Education'
+      if (-not (Test-Path $pmEdu)) { New-Item -Path $pmEdu -Force -ErrorAction SilentlyContinue | Out-Null }
+      Set-ItemProperty -Path $pmEdu -Name 'IsEducationEnvironment' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+      $global:LASTEXITCODE = 0
+
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Search', value: 'SearchboxTaskbarMode', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKU\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Search', value: 'SearchboxTaskbarMode', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'TaskbarMn', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKU\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'TaskbarMn', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'ShowCopilotButton', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKU\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'ShowCopilotButton', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'IsEnabled', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKU\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'IsEnabled', type: REG_DWORD, data: '0'}
+  - !powerShell:
+      wait: true
+      errorAction: Ignore
+      command: |
+        $sids = Get-ChildItem -Path 'Registry::HKU' -ErrorAction SilentlyContinue | Where-Object {
+          ($_.PSChildName -match '^S-1-5-21-' -and $_.PSChildName -notmatch '_Classes$') -or $_.PSChildName -match '^AME_UserHive_' -or $_.PSChildName -eq '.DEFAULT'
+        }
+        foreach ($s in $sids) {
+          $k = 'Registry::HKU\' + $s.PSChildName + '\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+          if (-not (Test-Path $k)) { New-Item -Path $k -Force -ErrorAction SilentlyContinue | Out-Null }
+          Set-ItemProperty -Path $k -Name 'TaskbarDa' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+        }
+        $global:LASTEXITCODE = 0
+
+
+
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings', value: 'TaskbarEndTask', type: REG_DWORD, data: '1'}
+  - !registryValue: {path: 'HKU\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings', value: 'TaskbarEndTask', type: REG_DWORD, data: '1'}
+
+  - !powerShell:
+    wait: true
+    errorAction: Ignore
+    command: |
+      # Each PowerShell action runs in its own process, so $marker has to be set
+      # here too. It was missing, which made the Test-Path below throw and skip
+      # the settings-change broadcast at the end of the block.
+      $marker = Join-Path $env:windir 'EBOS\.personalization-applied'
+      $taskDir = Join-Path $env:windir 'System32\Tasks\Microsoft\Windows\UpdateOrchestrator'
+      foreach ($tf in @('StartOobeAppsScan','StartOobeAppsScan_LicenseAccepted','StartOobeAppsScan_OobeAppReady','StartOobeAppsScanAfterUpdate')) {
+        $taskFile = Join-Path $taskDir $tf
+        if (Test-Path $taskFile) {
+          try { takeown /f $taskFile /a 2>&1 | Out-Null } catch {}
+          try { icacls $taskFile /grant Administrators:F 2>&1 | Out-Null } catch {}
+          Remove-Item -Path $taskFile -Force -ErrorAction SilentlyContinue
+        }
+      }
+      if (-not (Test-Path $marker)) {
+        Start-Sleep -Seconds 2
+        try {
+          $q = [char]34
+          $sig = '[DllImport(' + $q + 'user32.dll' + $q + ', SetLastError = true, CharSet = CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'
+          $type = Add-Type -MemberDefinition $sig -Name 'EBOSRefreshFinal' -Namespace 'EBOS' -PassThru -ErrorAction SilentlyContinue
+          if ($type) {
+            $r = [UIntPtr]::Zero
+            [void]$type::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'TraySettings', 0x0002, 1000, [ref]$r)
+            [void]$type::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Policy', 0x0002, 1000, [ref]$r)
+          }
+        } catch {}
+      }
+      $global:LASTEXITCODE = 0
+
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'TaskbarAl', type: REG_DWORD, data: '0', option: "fs-w10-tbleft"}
+  - !registryValue: {path: 'HKU\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', value: 'TaskbarAl', type: REG_DWORD, data: '0', option: "fs-w10-tbleft"}
+
+  - !powerShell:
+    option: "fs-small-icons"
+    wait: true
+    errorAction: Ignore
+    command: |
+      # Small desktop icons. The desktop's view state lives in the Shell
+      # Bags under Bags\1\Desktop. Writing it into a live profile does not
+      # stick, because the running desktop rewrites its in-memory state
+      # over ours on logoff. This runs before any real profile exists, so
+      # it seeds the Default hive that every new user is created from,
+      # which is how NTLite makes the same change survive. The final
+      # reboot at the end of the playbook does the applying; no Explorer
+      # restart is needed here.
+      #
+      #   IconSize        0x20 (32) = small       (0x10 smallest .. 0x100 largest)
+      #   Mode            1         = icon view
+      #   LogicalViewMode 3         = the value the shell writes for icons
+      function Set-SmallDesktopIcons {
+        param([string]$BagsRoot)
+        $desktop = Join-Path $BagsRoot 'Bags\1\Desktop'
+        try {
+          New-Item -Path $desktop -Force -ErrorAction SilentlyContinue | Out-Null
+          Set-ItemProperty -Path $desktop -Name 'IconSize'        -Value 32 -Type DWord -Force -ErrorAction SilentlyContinue
+          Set-ItemProperty -Path $desktop -Name 'Mode'            -Value 1  -Type DWord -Force -ErrorAction SilentlyContinue
+          Set-ItemProperty -Path $desktop -Name 'LogicalViewMode' -Value 3  -Type DWord -Force -ErrorAction SilentlyContinue
+          # A stale ViewState2 overrides the values above, so clear it.
+          Remove-ItemProperty -Path $desktop -Name 'ViewState2' -Force -ErrorAction SilentlyContinue
+        } catch {}
+      }
+
+      # Seed the AME-provided default hive if present.
+      if (Test-Path 'Registry::HKEY_USERS\AME_UserHive_Default') {
+        Set-SmallDesktopIcons 'Registry::HKEY_USERS\AME_UserHive_Default\Software\Microsoft\Windows\Shell'
+      }
+
+      # And the on-disk Default profile template, loaded explicitly, so a
+      # profile created after this playbook also inherits small icons.
+      $ntu = 'C:\Users\Default\NTUSER.DAT'
+      if ((Test-Path $ntu) -and -not (Test-Path 'Registry::HKEY_USERS\AME_UserHive_Default')) {
+        reg load 'HKLM\EBOS_SI' $ntu 2>$null | Out-Null
+        Set-SmallDesktopIcons 'HKLM:\EBOS_SI\Software\Microsoft\Windows\Shell'
+        [gc]::Collect(); Start-Sleep -Milliseconds 300
+        reg unload 'HKLM\EBOS_SI' 2>$null | Out-Null
+      }
+      $global:LASTEXITCODE = 0
+
+  - !registryValue: {path: 'HKLM\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\14\3895955085', value: 'EnabledStateOptions', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKLM\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\14\3895955085', value: 'EnabledState', type: REG_DWORD, data: '1'}
+  - !registryValue: {path: 'HKCU\Software\Microsoft\Windows\CurrentVersion\CDP', value: 'DragTrayEnabled', type: REG_DWORD, data: '0'}
+  - !registryValue: {path: 'HKU\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\CDP', value: 'DragTrayEnabled', type: REG_DWORD, data: '0'}
+
+  - !powerShell:
+      wait: true
+      errorAction: Ignore
+      command: |
+        $cbsPkg = 'MicrosoftWindows.Client.CBS_cw5n1h2txyewy'
+        $userProfiles = @()
+        try {
+          Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -ErrorAction SilentlyContinue | ForEach-Object {
+            $sid = $_.PSChildName
+            if ($sid -match '^S-1-5-21-') {
+              $pp = (Get-ItemProperty -Path $_.PSPath -Name 'ProfileImagePath' -ErrorAction SilentlyContinue).ProfileImagePath
+              if ($pp -and (Test-Path $pp)) { $userProfiles += $pp }
+            }
+          }
+        } catch {}
+        $userProfiles += """$env:SystemDrive\Users\Default"""
+        foreach ($p in $userProfiles) {
+          $cbsLocal = Join-Path $p ('AppData\Local\Packages\' + $cbsPkg + '\LocalState')
+          if (Test-Path $cbsLocal) {
+            foreach ($sub in @('IndexedDB','LocalCache','TempState','AC\AppCache')) {
+              $target = Join-Path $cbsLocal $sub
+              if (Test-Path $target) {
+                try { Remove-Item -Path $target -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+              }
+            }
+          }
+        }
+        $global:LASTEXITCODE = 0
+
+  - !powerShell:
+      wait: true
+      errorAction: Ignore
+      command: |
+        $packages = @(
+          'MicrosoftWindows.Client.CBS_cw5n1h2txyewy',
+          'Microsoft.UI.Xaml.CBS_8wekyb3d8bbwe',
+          'MicrosoftWindows.Client.Core_cw5n1h2txyewy',
+          'Microsoft.AccountsControl_cw5n1h2txyewy',
+          'Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy',
+          'Microsoft.Windows.CloudExperienceHost_cw5n1h2txyewy'
+        )
+        $sysApps = Join-Path $env:windir 'SystemApps'
+        foreach ($pkg in $packages) {
+          $manifestPath = Join-Path $sysApps ($pkg + '\appxmanifest.xml')
+          if (Test-Path $manifestPath) {
+            try {
+              Add-AppxPackage -Register -Path $manifestPath -DisableDevelopmentMode -ForceApplicationShutdown -ErrorAction SilentlyContinue
+            } catch {}
+          }
+        }
+        $global:LASTEXITCODE = 0
+
+
+  # --- personalization guard (Windows 11 26H2 regression) -----------
+  # KB5120998 and later reset cursor personalization and blank the
+  # wallpaper. Re-apply both at every logon instead of only at install.
+  - !powerShell:
+    exeDir: true
+    wait: true
+    errorAction: Ignore
+    command: |
+      $dir = Join-Path $env:ProgramData 'EBOS'
+      New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
+      # This folder holds a script run at EVERY logon with -ExecutionPolicy
+      # Bypass. Leaving it on inherited ProgramData permissions would mean a
+      # standard user who can write here gets code execution at each sign-in.
+      # Addressed by SID, not by name: "Users" is "Benutzer" on a German
+      # install and a name-based rule would silently fail to apply.
+      try {
+        $acl = Get-Acl -LiteralPath $dir
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($r in @($acl.Access)) { [void]$acl.RemoveAccessRule($r) }
+        foreach ($sid in @('S-1-5-18','S-1-5-32-544')) {
+          $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            (New-Object System.Security.Principal.SecurityIdentifier($sid)),
+            'FullControl','ContainerInherit,ObjectInherit','None','Allow')))
+        }
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+          (New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-545')),
+          'ReadAndExecute','ContainerInherit,ObjectInherit','None','Allow')))
+        Set-Acl -LiteralPath $dir -AclObject $acl
+      } catch {}
+      $src = Join-Path $PWD 'restore-personalization.ps1'
+      $dst = Join-Path $dir 'restore-personalization.ps1'
+      if (Test-Path -LiteralPath $src) {
+        Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction SilentlyContinue
+      }
+      if (Test-Path -LiteralPath $dst) {
+        try {
+          $arg = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $dst + '"'
+          $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+          $trg = New-ScheduledTaskTrigger -AtLogOn
+          # S-1-5-32-545 = Users, so it runs in the logging-on user session;
+          # SystemParametersInfo only affects the session that calls it.
+          $pri = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
+          $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+          Register-ScheduledTask -TaskName 'EBOS Personalization Guard' -Action $act -Trigger $trg -Principal $pri -Settings $set -Force -ErrorAction SilentlyContinue | Out-Null
+        } catch {}
+      }
+      $global:LASTEXITCODE = 0
+
+  - !writeStatus: {status: "Adding EBOS Features"}
+
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\PowerOptions', value: 'Position', type: REG_SZ, data: 'Middle'}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\PowerOptions', value: 'MUIVerb', type: REG_SZ, data: 'Power Plans'}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\PowerOptions', value: 'Icon', type: REG_SZ, data: 'powercpl.dll'}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\PowerOptions\command', value: '', type: REG_SZ, data: 'control.exe powercfg.cpl'}
+
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode\Shell\003-SafeNet', value: '', type: REG_SZ, data: 'Safe Mode + Networking'}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode', value: 'MUIVerb', type: REG_SZ, data: 'Safe Mode'}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode\Shell\002-Safe', value: 'HasLUAShield', type: REG_SZ, data: ''}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode\Shell\001-Normal\command', value: '', type: REG_SZ, data: 'powershell -windowstyle hidden -command "Start-Process cmd -ArgumentList ''/s,/c,bcdedit /deletevalue {current} safeboot & bcdedit /deletevalue {current} safebootalternateshell & shutdown -r -t 00 -f'' -Verb runAs"'}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode\Shell\003-SafeNet\command', value: '', type: REG_SZ, data: 'powershell -windowstyle hidden -command "Start-Process cmd -ArgumentList ''/s,/c,bcdedit /set {current} safeboot network & bcdedit /deletevalue {current} safebootalternateshell & shutdown -r -t 00 -f'' -Verb runAs"'}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode\Shell\001-Normal', value: '', type: REG_SZ, data: 'Normal Mode'}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode\Shell\002-Safe\command', value: '', type: REG_SZ, data: 'powershell -windowstyle hidden -command "Start-Process cmd -ArgumentList ''/s,/c,bcdedit /set {current} safeboot minimal & bcdedit /deletevalue {current} safebootalternateshell & shutdown -r -t 00 -f'' -Verb runAs"'}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode\Shell\001-Normal', value: 'HasLUAShield', type: REG_SZ, data: ''}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode\Shell\003-SafeNet', value: 'HasLUAShield', type: REG_SZ, data: ''}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode\Shell\004-SafeCmd', value: '', type: REG_SZ, data: 'Safe Mode + CMD'}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode\Shell\004-SafeCmd\command', value: '', type: REG_SZ, data: 'powershell -windowstyle hidden -command "Start-Process cmd -ArgumentList ''/s,/c,bcdedit /set {current} safeboot minimal & bcdedit /set {current} safebootalternateshell yes & shutdown -r -t 00 -f'' -Verb runAs"'}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode', value: 'SubCommands', type: REG_SZ, data: ''}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode', value: 'icon', type: REG_SZ, data: 'bootux.dll,-1032'}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode\Shell\002-Safe', value: '', type: REG_SZ, data: 'Safe Mode'}
+  - !registryValue: {path: 'HKCR\DesktopBackground\Shell\BootMode\Shell\004-SafeCmd', value: 'HasLUAShield', type: REG_SZ, data: ''}
+
+  - !registryValue: {path: 'HKCR\Drive\Shell\DriveTools\shell\002-OptOne\command', value: '', type: REG_SZ, data: 'PowerShell -windowstyle hidden -command "Start-Process cmd -ArgumentList ''/s,/k, defrag %1 /O /H'' -Verb runAs"'}
+  - !registryValue: {path: 'HKCR\Drive\shell\DriveTools', value: 'HasLUAShield', type: REG_SZ, data: ''}
+  - !registryValue: {path: 'HKCR\Drive\Shell\DriveTools\shell\003-OptAll\command', value: '', type: REG_SZ, data: 'PowerShell -windowstyle hidden -command "Start-Process cmd -ArgumentList ''/s,/k, defrag /C /O /H'' -Verb runAs"'}
+  - !registryValue: {path: 'HKCR\Drive\Shell\DriveTools\shell\002-OptOne', value: 'HasLUAShield', type: REG_SZ, data: ''}
+  - !registryValue: {path: 'HKCR\Drive\Shell\DriveTools\shell\002-OptOne', value: 'MUIVerb', type: REG_SZ, data: 'Optimize Drive'}
+  - !registryValue: {path: 'HKCR\Drive\Shell\DriveTools\shell\001-Analyze\command', value: '', type: REG_SZ, data: 'PowerShell -windowstyle hidden -command "Start-Process cmd -ArgumentList ''/s,/k, defrag %1 /A'' -Verb runAs"'}
+  - !registryValue: {path: 'HKCR\Drive\Shell\DriveTools\shell\003-OptAll', value: 'MUIVerb', type: REG_SZ, data: 'Optimize All Drives'}
+  - !registryValue: {path: 'HKCR\Drive\shell\DriveTools', value: 'Icon', type: REG_SZ, data: 'dfrgui.exe'}
+  - !registryValue: {path: 'HKCR\Drive\Shell\DriveTools\shell\003-OptAll', value: 'HasLUAShield', type: REG_SZ, data: ''}
+  - !registryValue: {path: 'HKCR\Drive\Shell\DriveTools\shell\001-Analyze', value: 'HasLUAShield', type: REG_SZ, data: ''}
+  - !registryValue: {path: 'HKCR\Drive\Shell\DriveTools\shell\001-Analyze', value: 'MUIVerb', type: REG_SZ, data: 'Analyze Drive'}
+  - !registryValue: {path: 'HKCR\Drive\shell\DriveTools', value: 'SubCommands', type: REG_SZ, data: ''}
+
+  - !powerShell:
+    wait: true
+    errorAction: Ignore
+    command: |
+      Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Desktop\NameSpace\{e88865ea-0e1c-4e20-9aa6-edcd0212c87c}' -Recurse -Force -ErrorAction SilentlyContinue
+      Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Desktop\NameSpace_41040327\{e88865ea-0e1c-4e20-9aa6-edcd0212c87c}' -Recurse -Force -ErrorAction SilentlyContinue
+      Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Desktop\NameSpace_36354489\{f874310e-b6b7-47dc-bc84-b9e6b38f5903}' -Recurse -Force -ErrorAction SilentlyContinue
+      Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer' -Name 'SimplifyQuickSettings' -Force -ErrorAction SilentlyContinue
+      Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Stickers' -Name 'EnableStickers' -Force -ErrorAction SilentlyContinue
+      $global:LASTEXITCODE = 0
+  - !powerShell:
+    wait: true
+    errorAction: Ignore
+    command: |
+      $marker = Join-Path $env:windir 'EBOS\.personalization-applied'
+      if (Test-Path $marker) { $global:LASTEXITCODE = 0; return }
+      foreach ($scope in @('Registry::HKEY_CURRENT_USER','Registry::HKEY_USERS\.DEFAULT')) {
+        Remove-ItemProperty -Path """$scope\Software\Microsoft\Windows\CurrentVersion\Explorer\StartPage""" -Name 'ProgramsCache' -Force -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path """$scope\Software\Microsoft\Windows\CurrentVersion\Explorer\StartPage2""" -Name 'ProgramsCache' -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path """$scope\Software\Microsoft\Windows\CurrentVersion\Explorer\Desktop\NameSpace\{f874310e-b6b7-47dc-bc84-b9e6b38f5903}""" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path """$scope\SOFTWARE\Microsoft\Siuf\Rules""" -Name 'PeriodInNanoSeconds' -Force -ErrorAction SilentlyContinue
+      }
+      $global:LASTEXITCODE = 0
+  - !powerShell:
+    option: "fs-wallpaper"
+    exeDir: true
+    wait: true
+    command: |
+      $src = Join-Path $PWD 'profile.png'
+      if (Test-Path $src) {
+        New-Item -ItemType Directory -Path """$env:windir\EBOS""" -Force -ErrorAction SilentlyContinue | Out-Null
+        Copy-Item -Path $src -Destination """$env:windir\EBOS\profile.png""" -Force
+      }
+      $global:LASTEXITCODE = 0
+  - !powerShell:
+    option: "fs-darkmode"
+    exeDir: true
+    wait: true
+    errorAction: Ignore
+    command: |
+      $src = Join-Path $PWD 'ebos-dark.theme'
+      if (Test-Path -LiteralPath $src) {
+        $dst = Join-Path $env:windir 'Resources\Themes\EBOS-dark.theme'
+        try { Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction SilentlyContinue } catch {}
+      }
+      $global:LASTEXITCODE = 0
+  - !powerShell:
+    option: "fs-wallpaper"
+    wait: true
+    errorAction: Ignore
+    command: |
+      $src = Join-Path $env:windir 'EBOS\profile.png'
+      if (-not (Test-Path $src)) { return }
+      $sysDir = Join-Path $env:ProgramData 'Microsoft\User Account Pictures'
+      New-Item -ItemType Directory -Path $sysDir -Force -ErrorAction SilentlyContinue | Out-Null
+      try {
+        $acl = Get-Acl $sysDir
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule('BUILTIN\Administrators','FullControl','ContainerInherit,ObjectInherit','None','Allow')
+        $acl.SetAccessRule($rule)
+        Set-Acl -Path $sysDir -AclObject $acl -ErrorAction SilentlyContinue
+      } catch {}
+      $sysFiles = @('user.png','user-32.png','user-40.png','user-48.png','user-192.png','guest.png','user.bmp')
+      foreach ($f in $sysFiles) {
+        $dest = Join-Path $sysDir $f
+        try {
+          if (Test-Path $dest) { Set-ItemProperty -Path $dest -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue }
+          Copy-Item -Path $src -Destination $dest -Force -ErrorAction SilentlyContinue
+        } catch {}
+      }
+      $sizes = @(32,40,48,64,96,192,208,240,424,448,1080)
+      $profileList = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
+      Get-ChildItem $profileList -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^S-1-5-21-' } | ForEach-Object {
+        $sid = $_.PSChildName
+        $profilePath = (Get-ItemProperty -Path $_.PSPath -Name 'ProfileImagePath' -ErrorAction SilentlyContinue).ProfileImagePath
+        if (-not $profilePath -or -not (Test-Path $profilePath)) { return }
+        $acctPic = Join-Path $profilePath 'AppData\Roaming\Microsoft\Windows\AccountPictures'
+        New-Item -ItemType Directory -Path $acctPic -Force -ErrorAction SilentlyContinue | Out-Null
+        foreach ($s in $sizes) {
+          Copy-Item -Path $src -Destination (Join-Path $acctPic ('Image' + $s + '.png')) -Force -ErrorAction SilentlyContinue
+        }
+        $publicPic = Join-Path $env:SystemDrive ('Users\Public\AccountPictures\' + $sid)
+        New-Item -ItemType Directory -Path $publicPic -Force -ErrorAction SilentlyContinue | Out-Null
+        foreach ($s in $sizes) {
+          Copy-Item -Path $src -Destination (Join-Path $publicPic ('Image' + $s + '.png')) -Force -ErrorAction SilentlyContinue
+        }
+        $regPath = """HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AccountPicture\Users\$sid"""
+        New-Item -Path $regPath -Force -ErrorAction SilentlyContinue | Out-Null
+        foreach ($s in $sizes) {
+          Set-ItemProperty -Path $regPath -Name ('Image' + $s) -Value (Join-Path $acctPic ('Image' + $s + '.png')) -Type String -Force -ErrorAction SilentlyContinue
+        }
+      }
+      $global:LASTEXITCODE = 0
+  - !registryValue: {path: 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion', value: 'EditionSubManufacturer', type: REG_SZ, data: 'EBOS'}
+  - !registryValue: {path: 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion', value: 'EditionSubstring', type: REG_SZ, data: 'EBOS'}
+  - !registryValue: {path: 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion', value: 'EditionSubVersion', type: REG_SZ, data: 'EBOS'}
+  - !registryValue: {path: 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation', value: 'Manufacturer', type: REG_SZ, data: 'EBOS'}
+  - !registryValue: {path: 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation', value: 'SupportURL', type: REG_SZ, data: 'https://discord.gg/9cHp2Jwq4b'}
+  - !powerShell:
+    command: |
+      $label = 'EBOS'
+      try {
+        $installEpoch = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'InstallDate' -ErrorAction SilentlyContinue).InstallDate
+        if ($installEpoch) {
+          $installUtc = [System.DateTimeOffset]::FromUnixTimeSeconds([System.Int64]$installEpoch).UtcDateTime
+          $ageHours = ((Get-Date).ToUniversalTime() - $installUtc).TotalHours
+          # EBOS: the 40-hour "EXP" relabel is disabled on purpose - the FreshInstall
+          # gate was lifted, so an aged install must not be branded differently.
+        }
+      } catch {}
+      bcdedit /set description """$label"""
+      Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation' -Name 'Model' -Value $label
+      Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'RegisteredOrganization' -Value $label
+      $global:LASTEXITCODE = 0
+    wait: true
+  - !registryValue: {path: 'HKCU\Environment', value: 'DOTNET_CLI_TELEMETRY_OPTOUT', type: REG_SZ, data: '1'}
+  - !registryValue: {path: 'HKU\.DEFAULT\Environment', value: 'DOTNET_CLI_TELEMETRY_OPTOUT', type: REG_SZ, data: '1'}
+  - !registryValue: {path: 'HKCU\Environment', value: 'POWERSHELL_TELEMETRY_OPTOUT', type: REG_SZ, data: '1'}
+  - !registryValue: {path: 'HKU\.DEFAULT\Environment', value: 'POWERSHELL_TELEMETRY_OPTOUT', type: REG_SZ, data: '1'}
+  - !powerShell:
+    wait: true
+    errorAction: Ignore
+    command: |
+      try { Set-Service -Name 'WSearch' -StartupType Automatic -ErrorAction SilentlyContinue } catch {}
+      Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WSearch' -Name 'Start' -Value 2 -Type DWord -Force -ErrorAction SilentlyContinue
+      Remove-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WSearch' -Name 'DelayedAutostart' -Force -ErrorAction SilentlyContinue
+      $global:LASTEXITCODE = 0
+  - !cmd: {command: 'fsutil behavior set disableLastAccess 1'}
+  - !cmd: {command: 'fsutil behavior set disable8dot3 1'}
+  - !cmd: {command: 'net accounts /maxpwage:unlimited'}
+  - !powerShell: {command: 'Disable-WindowsErrorReporting'}
+  - !run:
+    exeDir: true
+    exe: "PowerShell"
+    args: '-NoP -EP Bypass -File .\\setup-timerresolution.ps1'
+
+  # Ungated on purpose: anyone carrying a broken WdBoot state from an earlier build
+  # needs this whether or not they tick Defender removal this time. The script's own
+  # first action is to check whether Defender is still present and do nothing if so,
+  # so a healthy machine is never touched.
+  - !run:
+    exeDir: true
+    exe: "PowerShell"
+    args: '-NoP -EP Bypass -File .\\fix-wdboot.ps1'
+    weight: 100
+    wait: true
+  - !writeStatus: {status: "Setting Max Refresh Rate"}
+  - !powerShell:
+    wait: true
+    errorAction: Ignore
+    command: |
+      $csLines = @(
+        'using System;',
+        'using System.Runtime.InteropServices;',
+        'public static class EbosDisplay {',
+        '[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]',
+        'public struct DEVMODE {',
+        '[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;',
+        'public ushort dmSpecVersion; public ushort dmDriverVersion; public ushort dmSize;',
+        'public ushort dmDriverExtra; public uint dmFields;',
+        'public int dmPositionX; public int dmPositionY;',
+        'public uint dmDisplayOrientation; public uint dmDisplayFixedOutput;',
+        'public short dmColor; public short dmDuplex; public short dmYResolution;',
+        'public short dmTTOption; public short dmCollate;',
+        '[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;',
+        'public ushort dmLogPixels; public uint dmBitsPerPel;',
+        'public uint dmPelsWidth; public uint dmPelsHeight;',
+        'public uint dmDisplayFlags; public uint dmDisplayFrequency;',
+        'public uint dmICMMethod; public uint dmICMIntent; public uint dmMediaType;',
+        'public uint dmDitherType; public uint dmReserved1; public uint dmReserved2;',
+        'public uint dmPanningWidth; public uint dmPanningHeight;',
+        '}',
+        '[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]',
+        'public struct DISPLAY_DEVICE {',
+        'public int cb;',
+        '[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string DeviceName;',
+        '[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceString;',
+        'public uint StateFlags;',
+        '[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceID;',
+        '[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceKey;',
+        '}',
+        '[DllImport(@Q@user32.dll@Q@, CharSet = CharSet.Unicode)]',
+        'public static extern bool EnumDisplayDevices(string lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);',
+        '[DllImport(@Q@user32.dll@Q@, CharSet = CharSet.Unicode)]',
+        'public static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);',
+        '[DllImport(@Q@user32.dll@Q@, CharSet = CharSet.Unicode)]',
+        'public static extern int ChangeDisplaySettingsEx(string lpszDeviceName, ref DEVMODE lpDevMode, IntPtr hwnd, uint dwflags, IntPtr lParam);',
+        '}'
+      )
+      $src = ($csLines -join [System.Environment]::NewLine).Replace('@Q@', [string][char]34)
+      try { Add-Type -TypeDefinition $src -ErrorAction Stop } catch { $global:LASTEXITCODE = 0; return }
+
+      $ENUM_CURRENT = -1
+      $ATTACHED = 1
+      $UPDATEREGISTRY = 1
+      $GLOBAL = 8
+      $lines = @()
+
+      for ($i = 0; $i -lt 16; $i++) {
+        $dd = New-Object EbosDisplay+DISPLAY_DEVICE
+        $dd.cb = [System.Runtime.InteropServices.Marshal]::SizeOf($dd)
+        if (-not [EbosDisplay]::EnumDisplayDevices($null, $i, [ref]$dd, 0)) { break }
+        if (($dd.StateFlags -band $ATTACHED) -eq 0) { continue }
+        $name = $dd.DeviceName
+
+        $cur = New-Object EbosDisplay+DEVMODE
+        $cur.dmSize = [uint16][System.Runtime.InteropServices.Marshal]::SizeOf($cur)
+        if (-not [EbosDisplay]::EnumDisplaySettings($name, $ENUM_CURRENT, [ref]$cur)) { continue }
+
+        $best = $cur
+        $m = 0
+        while ($true) {
+          $test = New-Object EbosDisplay+DEVMODE
+          $test.dmSize = [uint16][System.Runtime.InteropServices.Marshal]::SizeOf($test)
+          if (-not [EbosDisplay]::EnumDisplaySettings($name, $m, [ref]$test)) { break }
+          $m++
+          if ($test.dmPelsWidth -ne $cur.dmPelsWidth) { continue }
+          if ($test.dmPelsHeight -ne $cur.dmPelsHeight) { continue }
+          if ($test.dmBitsPerPel -ne $cur.dmBitsPerPel) { continue }
+          if ($test.dmDisplayFrequency -gt $best.dmDisplayFrequency) { $best = $test }
+        }
+
+        if ($best.dmDisplayFrequency -gt $cur.dmDisplayFrequency) {
+          $rc = [EbosDisplay]::ChangeDisplaySettingsEx($name, [ref]$best, [IntPtr]::Zero, ($UPDATEREGISTRY -bor $GLOBAL), [IntPtr]::Zero)
+          $lines += ($name + ' ' + $cur.dmDisplayFrequency + 'Hz to ' + $best.dmDisplayFrequency + 'Hz rc=' + $rc)
+        } else {
+          $lines += ($name + ' already at ' + $cur.dmDisplayFrequency + 'Hz')
+        }
+      }
+
+      try {
+        $dir = Join-Path $env:windir 'EBOS'
+        if (-not (Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
+        # $lines is empty when no monitor reported a higher mode than it was already
+        # using, which produced a bare timestamp and a dangling dash.
+        $body = if ($lines -and $lines.Count -gt 0) { $lines -join '; ' } else { 'no monitor needed a change' }
+        ((Get-Date -Format s) + ' - ' + $body) | Out-File -FilePath (Join-Path $dir 'refresh-rate.txt') -Append -Encoding utf8
+      } catch {}
+      $global:LASTEXITCODE = 0
+  # gpupdate contacts a domain controller when the machine is joined, and on one
+  # with a stale or unreachable DC it can block for a very long time. A native
+  # !run has no timeout, so it is bounded here. Nothing depends on it finishing -
+  # the policies are already written to the registry above.
+  - !powerShell:
+      wait: true
+      errorAction: Ignore
+      command: |
+        try {
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = [System.IO.Path]::Combine($env:windir, 'System32', 'gpupdate.exe')
+          $psi.Arguments = '/target:computer'
+          $psi.UseShellExecute = $false
+          $psi.CreateNoWindow = $true
+          $proc = [System.Diagnostics.Process]::Start($psi)
+          if (-not $proc.WaitForExit(120000)) {
+            try { $proc.Kill() } catch {}
+            $dir = Join-Path $env:windir 'EBOS'
+            if (-not (Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
+            @((Get-Date -Format s) + ' - gpupdate timed out after 2 min and was killed') | Out-File -FilePath (Join-Path $dir 'skipped-tasks.txt') -Append -Encoding utf8
+          }
+        } catch {}
+        $global:LASTEXITCODE = 0

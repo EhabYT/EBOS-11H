@@ -1,0 +1,26 @@
+EBOS
+Licensed under the PolyForm Noncommercial License 1.0.0.
+
+build id   : 20261008.fb75f1
+built      : 2026-10-08 20:54 UTC-ish
+
+applied build steps:
+  - apply-26h2-hardening.py
+  - apply-allow-atlas.py
+  - apply-branding.py
+  - apply-build-stamp.py
+  - apply-cursors.py
+  - apply-dash-accent.py
+  - apply-dash-strings.py
+  - apply-exe-icon.py
+  - apply-msa-keep.py
+  - apply-oem-power.py
+  - apply-personalization-guard.py
+  - apply-remove-dash.py
+  - apply-requirements.py
+  - apply-support-url.py
+  - apply-wallpaper.py
+
+Check you are running THIS build: the wizard header must read
+    EBOS [build 20261008.fb75f1]
+If it shows a different id, an older archive was loaded.

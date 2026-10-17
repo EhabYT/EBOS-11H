@@ -1,0 +1,55 @@
+[Theme]
+DisplayName=EBOS Dark
+ThemeId={1545A5F7-3E0C-4670-8A21-99FDEEA37AA5}
+
+[Control Panel\Desktop]
+Wallpaper=%SystemRoot%\Web\Wallpaper\EBOS\wallpaper.png
+Pattern=
+MultimonBackgrounds=0
+PicturePosition=4
+WindowsSpotlight=0
+
+; LockScreen=%SystemRoot%\Web\Wallpaper\EBOS\lockscreen.png
+; Note: Windows theme engine ignores lockscreen here - applied via HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization LockScreenImagePath (see phase5-apply.yml:162-163)
+
+[Control Panel\Cursors]
+AppStarting=%SystemRoot%\Cursors\EBOS\ebos-appstarting.ani
+Arrow=%SystemRoot%\Cursors\EBOS\ebos-arrow.ani
+Crosshair=%SystemRoot%\Cursors\EBOS\ebos-cross.ani
+Hand=%SystemRoot%\Cursors\EBOS\ebos-hand.ani
+Help=%SystemRoot%\Cursors\EBOS\ebos-help.ani
+IBeam=%SystemRoot%\Cursors\EBOS\ebos-ibeam.ani
+No=%SystemRoot%\Cursors\EBOS\ebos-no.ani
+NWPen=%SystemRoot%\Cursors\EBOS\ebos-pen.ani
+SizeAll=%SystemRoot%\Cursors\EBOS\ebos-sizeall.ani
+SizeNESW=%SystemRoot%\Cursors\EBOS\ebos-sizenesw.ani
+SizeNS=%SystemRoot%\Cursors\EBOS\ebos-sizens.ani
+SizeNWSE=%SystemRoot%\Cursors\EBOS\ebos-sizenwse.ani
+SizeWE=%SystemRoot%\Cursors\EBOS\ebos-sizewe.ani
+UpArrow=%SystemRoot%\Cursors\EBOS\ebos-up.ani
+Wait=%SystemRoot%\Cursors\EBOS\ebos-wait.ani
+Pin=%SystemRoot%\Cursors\EBOS\ebos-pin.ani
+Person=%SystemRoot%\Cursors\EBOS\ebos-person.ani
+DefaultValue=EBOS
+
+[Sounds]
+SchemeName=No Sounds
+
+[VisualStyles]
+Path=%SystemRoot%\resources\themes\Aero\Aero.msstyles
+ColorStyle=NormalColor
+Size=NormalSize
+AutoColorization=0
+ColorizationColor=0XFF3778B5
+SystemMode=Dark
+AppMode=Dark
+VisualStyleVersion=10
+
+; EBOS Blue palette (#5D9CD6 / #3778B5 / #1D5188 / #2A4A7B / #1F3A61 / #14263F)
+; Accent=Mittelblau #3778B5 (55 120 181) -> ColorizationColor above
+; Background=Marineblau #14263F (20 38 63) -> see [Control Panel\Colors]
+[Control Panel\Colors]
+Background=20 38 63
+
+[MasterThemeSelector]
+MTSM=RJSPBS

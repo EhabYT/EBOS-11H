@@ -1,0 +1,466 @@
+---
+privilege: TrustedInstaller
+actions:
+  - !powerShell:
+    wait: true
+    command: |
+      Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+      $title = 'EBOS Cannot Install'
+      $url = 'www.microsoft.com/software-download/windows11'
+      if (Test-Path -LiteralPath ($env:windir + '\EBOS')) {
+        $global:LASTEXITCODE = 0
+        return
+      }
+      $detected = $null
+      $productName = ''
+      try {
+        $pn = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'ProductName' -ErrorAction SilentlyContinue).ProductName
+        if ($pn) { $productName = [string]$pn }
+      } catch {}
+      $editionId = ''
+      try {
+        $ed = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'EditionID' -ErrorAction SilentlyContinue).EditionID
+        if ($ed) { $editionId = [string]$ed }
+      } catch {}
+      $haystack = ($productName + ' ' + $editionId).ToLower()
+      $oemHaystack = ''
+      try {
+        $oemInfo = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation' -ErrorAction SilentlyContinue
+        if ($oemInfo) {
+          foreach ($n in @('Manufacturer','Model','SupportURL','SupportPhone','SupportHours','Logo','SupportProvider','SupportAppLink')) {
+            $v = $oemInfo.$n
+            if ($v) { $oemHaystack += ' ' + ([string]$v) }
+          }
+        }
+      } catch {}
+      $oemHaystack = $oemHaystack.ToLower()
+      if (($haystack -match '\bebos\b') -and $haystack -notmatch 'ebos-x' -and $haystack -notmatch 'fsos-x' -and -not (Test-Path 'HKLM:\SOFTWARE\EBOS\EBOS') -and -not (Test-Path 'HKLM:\SOFTWARE\EBOS\EBOS-X')) {
+        $oldEbosLabel = $productName.Trim()
+        if (-not $oldEbosLabel) { $oldEbosLabel = 'a previous EBOS version' }
+        $msg = 'EBOS cannot be installed over ' + $oldEbosLabel + '. Please reinstall stock Windows first. The latest version can be downloaded from ' + $url
+        [System.Windows.Forms.MessageBox]::Show($msg, $title, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error, [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly) | Out-Null
+        Stop-Process -Name 'AME Beta','AME Wizard Beta','AME','TrustedUninstaller.CLI' -Force -ErrorAction SilentlyContinue
+        $global:LASTEXITCODE = 1
+        exit 1
+      }
+      $osList = @(
+        @{ Name = 'ReviOS';         Patterns = @('revios','revi os');                    Paths = @('C:\ReviOS');         Keys = @('HKLM:\SOFTWARE\Revision','HKLM:\SOFTWARE\ReviOS') },
+        @{ Name = 'Tiny11';         Patterns = @('tiny11','tiny 11');                    Paths = @('C:\Tiny11');         Keys = @() },
+        @{ Name = 'Ghost Spectre';  Patterns = @('ghost spectre','ghostspectre','spectre'); Paths = @('C:\Ghost Spectre'); Keys = @() },
+        @{ Name = 'Windows X-Lite'; Patterns = @('x-lite','xlite','windows x lite');     Paths = @('C:\X-Lite');         Keys = @() },
+        @{ Name = 'CactusOS';       Patterns = @('cactusos','cactus os');                Paths = @('C:\CactusOS');       Keys = @() },
+        @{ Name = 'KernelOS';       Patterns = @('kernelos','kernel os');                Paths = @('C:\KernelOS');       Keys = @() },
+        @{ Name = 'YukiOS';         Patterns = @('yukios','yuki os');                    Paths = @('C:\YukiOS');         Keys = @() },
+        @{ Name = 'NovaOS';         Patterns = @('novaos','nova os');                    Paths = @('C:\NovaOS');         Keys = @() },
+        @{ Name = 'FoxOS';          Patterns = @('foxos','fox os');                      Paths = @('C:\FoxOS');          Keys = @() },
+        @{ Name = 'ggOS';           Patterns = @('ggos','gg os');                        Paths = @('C:\ggOS');           Keys = @() },
+        @{ Name = 'SapphireOS';     Patterns = @('sapphireos','sapphire os');            Paths = @('C:\SapphireOS');     Keys = @() },
+        @{ Name = 'VainOS';         Patterns = @('vainos','vain os');                    Paths = @('C:\VainOS');         Keys = @() },
+        @{ Name = 'BlitzOS';        Patterns = @('blitzos','blitz os');                  Paths = @('C:\BlitzOS');        Keys = @() },
+        @{ Name = 'AtomOS';         Patterns = @('atomos','atom os');                    Paths = @('C:\AtomOS');         Keys = @() },
+        @{ Name = 'IrisOS';         Patterns = @('irisos','iris os');                    Paths = @('C:\IrisOS');         Keys = @() },
+        @{ Name = 'PeakOS';         Patterns = @('peakos','peak os');                    Paths = @('C:\PeakOS');         Keys = @() },
+        @{ Name = 'xOS';            Patterns = @(' xos ',' x os ');                      Paths = @('C:\xOS');            Keys = @() },
+        @{ Name = 'SOS';            Patterns = @(' sos ');                               Paths = @('C:\SOS');            Keys = @() },
+        @{ Name = 'WinterOS';       Patterns = @('winteros','winter os');                Paths = @('C:\WinterOS');       Keys = @() },
+        @{ Name = 'SynergyOS';      Patterns = @('synergyos','synergy os');              Paths = @('C:\SynergyOS');      Keys = @() },
+        @{ Name = 'KirbyOS';        Patterns = @('kirbyos','kirby os');                  Paths = @('C:\KirbyOS');        Keys = @() },
+        @{ Name = 'LuminOS';        Patterns = @('luminos','lumin os');                  Paths = @('C:\LuminOS');        Keys = @() }
+      )
+      foreach ($os in $osList) {
+        if ($detected) { break }
+        foreach ($pat in $os.Patterns) {
+          if ($haystack.Contains($pat)) { $detected = $os.Name; break }
+        }
+        if ($detected) { break }
+        foreach ($pat in $os.Patterns) {
+          if ($oemHaystack -and $oemHaystack.Contains($pat)) { $detected = $os.Name; break }
+        }
+        if ($detected) { break }
+        foreach ($pth in $os.Paths) {
+          if (Test-Path -LiteralPath $pth) { $detected = $os.Name; break }
+        }
+        if ($detected) { break }
+        foreach ($k in $os.Keys) {
+          if (Test-Path -LiteralPath $k) { $detected = $os.Name; break }
+        }
+      }
+      if ($detected) {
+        $msg = 'EBOS cannot be installed over ' + $detected + '. EBOS supports stock Windows 10 22H2 and Windows 11 23H2, 24H2, 25H2 and 26H2. The latest version can be downloaded from ' + $url
+        [System.Windows.Forms.MessageBox]::Show($msg, $title, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error, [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly) | Out-Null
+        Stop-Process -Name 'AME Beta','AME Wizard Beta','AME','TrustedUninstaller.CLI' -Force -ErrorAction SilentlyContinue
+        $global:LASTEXITCODE = 1
+        exit 1
+      }
+      $global:LASTEXITCODE = 0
+  - !powerShell:
+    wait: true
+    command: |
+      Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+      $url = 'www.microsoft.com/software-download/windows11'
+      $build = 0
+      try { $build = [int](Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'CurrentBuildNumber' -ErrorAction SilentlyContinue).CurrentBuildNumber } catch {}
+      $supported = @(19044, 19045, 22631, 26100, 26200, 26300)
+      if ($build -gt 0 -and ($supported -notcontains $build)) {
+        $osName = 'this version of Windows (build ' + $build + ')'
+        if ($build -lt 19044) { $osName = 'this version of Windows 10 (build ' + $build + ')' }
+        elseif ($build -gt 19045 -and $build -lt 22000) { $osName = 'this version of Windows 10 (build ' + $build + ')' }
+        elseif ($build -eq 22000) { $osName = 'Windows 11 21H2' }
+        elseif ($build -eq 22621) { $osName = 'Windows 11 22H2' }
+        elseif ($build -gt 22621 -and $build -lt 26100) { $osName = 'this version of Windows 11 (build ' + $build + ')' }
+        elseif ($build -eq 28000) { $osName = 'Windows 11 26H1, which is a different servicing branch and is not supported' }
+        $msg = 'EBOS does not support ' + $osName + '. EBOS supports Windows 10 21H2 and 22H2, and Windows 11 23H2, 24H2, 25H2 and 26H2. The latest supported version can be downloaded from ' + $url
+        [System.Windows.Forms.MessageBox]::Show($msg, 'EBOS Cannot Install', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error, [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly) | Out-Null
+        Stop-Process -Name 'AME Beta','AME Wizard Beta','AME','TrustedUninstaller.CLI' -Force -ErrorAction SilentlyContinue
+        $global:LASTEXITCODE = 1
+        exit 1
+      }
+      $global:LASTEXITCODE = 0
+  - !powerShell:
+    wait: true
+    command: |
+      Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+      $encrypted = $false
+      try {
+        $sysDrive = $env:SystemDrive
+        $vols = Get-CimInstance -Namespace 'root\cimv2\security\MicrosoftVolumeEncryption' -ClassName Win32_EncryptableVolume -ErrorAction SilentlyContinue
+        foreach ($v in $vols) {
+          if ($v.DriveLetter -eq $sysDrive -and [int]$v.ProtectionStatus -eq 1) { $encrypted = $true; break }
+        }
+      } catch {}
+      if ($encrypted) {
+        $msgLines = @(
+          'BitLocker is enabled on your Windows drive. To prevent issues and potential lockouts after doing deep Windows customizations, please disable it before proceeding with the installation.',
+          '',
+          'Press Win+S and search for Manage BitLocker or Device Encryption in order to turn it off.'
+        )
+        $msg = $msgLines -join [Environment]::NewLine
+        [System.Windows.Forms.MessageBox]::Show($msg, 'EBOS Cannot Install', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error, [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly) | Out-Null
+        Stop-Process -Name 'AME Beta','AME Wizard Beta','AME','TrustedUninstaller.CLI' -Force -ErrorAction SilentlyContinue
+        $global:LASTEXITCODE = 1
+        exit 1
+      }
+      $global:LASTEXITCODE = 0
+  - !writeStatus: {status: "Blocking Telemetry"}
+  - !cmd: {command: 'mkdir "%WINDIR%\EBOS" 2>nul'}
+  - !cmd: {command: 'mkdir "%WINDIR%\EBOS\Tools" 2>nul'}
+  # Add-MpPreference talks to Defender's WMI provider, which can wedge on a damaged
+  # or half-removed install. This is the first thing a disable-defender run does,
+  # so a stall here would look like the playbook never started. Bounded to 60s.
+  - !powerShell:
+      option: "disable-defender"
+      wait: true
+      errorAction: Ignore
+      command: |
+        try {
+          $job = Start-Job -ScriptBlock {
+            try { Add-MpPreference -ExclusionPath (Join-Path $env:windir 'EBOS') -Force -ErrorAction SilentlyContinue } catch {}
+          }
+          if (-not (Wait-Job $job -Timeout 60)) {
+            Stop-Job $job -ErrorAction SilentlyContinue
+          }
+          Remove-Job $job -Force -ErrorAction SilentlyContinue
+        } catch {}
+        $global:LASTEXITCODE = 0
+  - !cmd:
+    exeDir: true
+    option: "disable-defender"
+    command: 'copy /y "nuke-defender-files.ps1" "%WINDIR%\EBOS\Tools\nuke-defender-files.ps1" >nul 2>nul || exit /b 0'
+  - !cmd:
+    exeDir: true
+    command: 'copy /y "fix-wdboot.ps1" "%WINDIR%\EBOS\Tools\fix-wdboot.ps1" >nul 2>nul || exit /b 0'
+  - !cmd:
+    exeDir: true
+    option: "disable-defender"
+    command: 'copy /y "defender-restart-notice.ps1" "%WINDIR%\EBOS\Tools\defender-restart-notice.ps1" >nul 2>nul || exit /b 0'
+  - !cmd:
+    exeDir: true
+    option: "disable-defender"
+    command: 'copy /y "nuke-defender-launcher.vbs" "%WINDIR%\EBOS\Tools\nuke-defender-launcher.vbs" >nul 2>nul || exit /b 0'
+  # Truncated first so a re-apply cannot append to the previous run's list, then
+  # every option is recorded - not just eight - so the verification pass at the end
+  # of phase7 knows which gated actions were meant to run.
+  - !cmd: {command: 'cmd /c break>"%WINDIR%\\EBOS\\ebos-options.txt"'}
+  - !cmd: {command: 'cmd /c echo browser-brave>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "browser-brave"}
+  - !cmd: {command: 'cmd /c echo disable-auto-driver-updates>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "disable-auto-driver-updates"}
+  - !cmd: {command: 'cmd /c echo disable-bluetooth>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "disable-bluetooth"}
+  - !cmd: {command: 'cmd /c echo disable-defender>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "disable-defender"}
+  - !cmd: {command: 'cmd /c echo disable-location>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "disable-location"}
+  - !cmd: {command: 'cmd /c echo disable-mitigations>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "disable-mitigations"}
+  - !cmd: {command: 'cmd /c echo disable-power-saving>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "disable-power-saving"}
+  - !cmd: {command: 'cmd /c echo disable-printing>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "disable-printing"}
+  - !cmd: {command: 'cmd /c echo disable-storage-sense>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "disable-storage-sense"}
+  - !cmd: {command: 'cmd /c echo disable-webview2>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "disable-webview2"}
+  - !cmd: {command: 'cmd /c echo disable-wifi>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "disable-wifi"}
+  - !cmd: {command: 'cmd /c echo fs-darkmode>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "fs-darkmode"}
+  - !cmd: {command: 'cmd /c echo fs-noanimations>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "fs-noanimations"}
+  - !cmd: {command: 'cmd /c echo fs-notransparency>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "fs-notransparency"}
+  - !cmd: {command: 'cmd /c echo fs-privacy>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "fs-privacy"}
+  - !cmd: {command: 'cmd /c echo fs-small-icons>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "fs-small-icons"}
+  - !cmd: {command: 'cmd /c echo fs-w10-context>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "fs-w10-context"}
+  - !cmd: {command: 'cmd /c echo fs-w10-taskbar>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "fs-w10-taskbar"}
+  - !cmd: {command: 'cmd /c echo fs-w10-tbleft>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "fs-w10-tbleft"}
+  - !cmd: {command: 'cmd /c echo fs-wallpaper>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "fs-wallpaper"}
+  - !cmd: {command: 'cmd /c echo remove-accessibility>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "remove-accessibility"}
+  - !cmd: {command: 'cmd /c echo remove-ai>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "remove-ai"}
+  - !cmd: {command: 'cmd /c echo remove-bloat>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "remove-bloat"}
+  - !cmd: {command: 'cmd /c echo remove-edge>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "remove-edge"}
+  - !cmd: {command: 'cmd /c echo remove-hyperv>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "remove-hyperv"}
+  - !cmd: {command: 'cmd /c echo remove-onedrive>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "remove-onedrive"}
+  - !cmd: {command: 'cmd /c echo remove-store>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "remove-store"}
+  - !cmd: {command: 'cmd /c echo remove-xbox>>"%WINDIR%\\EBOS\\ebos-options.txt"', option: "remove-xbox"}
+
+  - !writeStatus: {status: "Importing Power Plans"}
+  - !powerShell:
+    wait: true
+    exeDir: true
+    errorAction: Ignore
+    command: |
+      # Switching to Balanced is a working step only: powercfg refuses to delete
+      # or overwrite the ACTIVE scheme. Remember what the user was actually on so
+      # it can be put back if they did not ask us to change it.
+      try {
+        $dir = Join-Path $env:windir 'EBOS'
+        if (-not (Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
+        $act = (powercfg -getactivescheme) -join ' '
+        if ($act -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') {
+          $matches[1] | Out-File -FilePath (Join-Path $dir 'original-power-scheme.txt') -Encoding ascii -Force
+        }
+      } catch {}
+      powercfg -setactive 381b4222-f694-41f0-9685-ff5bb260df2e
+      Start-Sleep -Milliseconds 300
+
+      $amdGuid = 'e4c7a13f-5b9d-42a0-9e61-3a3f620460bc'
+
+      powercfg -delete $amdGuid 2>$null | Out-Null
+
+      function Import-PowPlan {
+        param($file, $targetGuid, $name, $desc)
+        $out = powercfg -import (Resolve-Path $file).Path 2>&1
+        $line = $out | Where-Object { $_ -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})' } | Select-Object -First 1
+        if ($line -and $line -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') {
+          $newGuid = $matches[1]
+          powercfg -duplicatescheme $newGuid $targetGuid 2>$null | Out-Null
+          powercfg -delete $newGuid 2>$null | Out-Null
+          powercfg -changename $targetGuid $name $desc 2>$null | Out-Null
+          return $true
+        }
+        return $false
+      }
+
+      Import-PowPlan 'power-amd.pow' $amdGuid 'EBOS AMD Gaming' 'EBOS AMD gaming power profile'
+
+
+  # "Disable Power Saving" ticked -> Ultimate Performance.
+  - !powerShell:
+    option: "disable-power-saving"
+    wait: true
+    errorAction: Ignore
+    command: |
+      # Ultimate Performance. Earlier versions called -duplicatescheme with no
+      # destination GUID, and powercfg mints a fresh GUID every time it is
+      # called that way, so each upgrade left another identical copy behind.
+      #
+      # Use whichever copy already exists, create one only when there is none,
+      # and clear out the leftovers from previous applies. These are unmodified
+      # stock Windows plans, so removing the spares loses nothing.
+      $ultimateSourceGuid = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
+      $ebosUltimateGuid   = 'b7c1e4d9-3a52-4f88-9c60-2d5e8a1f6b34'
+      $applied = $null
+
+      function Get-PowerSchemes {
+        $found = @()
+        foreach ($line in (powercfg /list 2>$null)) {
+          if ($line -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*\(([^)]*)\)') {
+            $found += [pscustomobject]@{ Guid = $matches[1]; Name = $matches[2].Trim() }
+          }
+        }
+        return $found
+      }
+
+      $schemes = Get-PowerSchemes
+
+      # Prefer the built-in GUID, then one we made earlier. Either way: no import.
+      $keeper = $schemes | Where-Object { $_.Guid -eq $ultimateSourceGuid } | Select-Object -First 1
+      if (-not $keeper) {
+        $keeper = $schemes | Where-Object { $_.Guid -eq $ebosUltimateGuid } | Select-Object -First 1
+      }
+
+      # Neither is present. Either the machine has never had it, or it only has
+      # the random-GUID copies older versions produced. Instantiate it once
+      # under our fixed GUID; the sweep below then collapses everything else
+      # into that one plan, and every later upgrade finds it above.
+      if (-not $keeper) {
+        powercfg -duplicatescheme $ultimateSourceGuid $ebosUltimateGuid 2>$null | Out-Null
+        $keeper = Get-PowerSchemes | Where-Object { $_.Guid -eq $ebosUltimateGuid } | Select-Object -First 1
+      }
+
+      if ($keeper) {
+        powercfg -setactive $keeper.Guid 2>$null | Out-Null
+        $act = (powercfg -getactivescheme) -join ' '
+        if ($act -match [regex]::Escape($keeper.Guid)) { $applied = $keeper.Guid }
+      }
+
+      # Delete the spares. Compared against the keeper's OWN name rather than a
+      # hardcoded English string, so this works on localized Windows. Runs after
+      # -setactive because powercfg refuses to delete the active scheme.
+      if ($applied -and $keeper.Name) {
+        foreach ($s in (Get-PowerSchemes)) {
+          if ($s.Guid -ne $keeper.Guid -and $s.Name -eq $keeper.Name) {
+            powercfg -delete $s.Guid 2>$null | Out-Null
+          }
+        }
+      }
+      # Last resort on SKUs that refuse Ultimate Performance outright: High
+      # Performance, still ahead of the Balanced default.
+      if (-not $applied) {
+        powercfg -setactive '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c' 2>$null | Out-Null
+      }
+
+  # "Disable Power Saving" unticked -> put back whatever they were on before.
+  - !powerShell:
+    option: "!disable-power-saving"
+    wait: true
+    errorAction: Ignore
+    command: |
+      # Not Balanced: restore the scheme recorded before the import step moved
+      # off it. If the file is missing, leave the plan alone rather than picking
+      # one the user never chose.
+      try {
+        $file = Join-Path $env:windir 'EBOS\original-power-scheme.txt'
+        if (Test-Path $file) {
+          $guid = (Get-Content -Path $file -TotalCount 1 -ErrorAction SilentlyContinue).Trim()
+          if ($guid -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
+            $list = (powercfg /list 2>$null) -join "`n"
+            if ($list -match [regex]::Escape($guid)) {
+              powercfg -setactive $guid 2>$null | Out-Null
+            }
+          }
+        }
+      } catch {}
+      $global:LASTEXITCODE = 0
+
+  - !writeStatus: {status: "Installing VC++ Redist"}
+  - !powerShell:
+    wait: true
+    command: |
+      $dest = Join-Path $env:TEMP 'vcredist.exe'
+      $ok = $false
+      try {
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile $dest -UseBasicParsing -TimeoutSec 120
+        $ok = (Test-Path -LiteralPath $dest) -and ((Get-Item -LiteralPath $dest).Length -gt 0)
+      } catch { $ok = $false }
+      if (-not $ok) {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        $msg = 'EBOS requires an active internet connection to download required components (Visual C++ Redistributable). Please connect to the internet and run EBOS again.'
+        [System.Windows.Forms.MessageBox]::Show($msg, 'EBOS Cannot Install', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error, [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly) | Out-Null
+        Stop-Process -Name 'AME Beta','AME Wizard Beta','AME','TrustedUninstaller.CLI' -Force -ErrorAction SilentlyContinue
+        $global:LASTEXITCODE = 1
+        exit 1
+      }
+      try { Start-Process -FilePath $dest -ArgumentList '/install','/quiet','/norestart' -Wait } catch {}
+      $global:LASTEXITCODE = 0
+
+  - !writeStatus: {status: "Installing DirectX Runtime"}
+  - !powerShell:
+    exeDir: true
+    wait: true
+    errorAction: Ignore
+    command: |
+      $dxDir = Join-Path $PWD 'dxredist'
+      $dx = Join-Path $dxDir 'DXSETUP.exe'
+      if (Test-Path $dx) {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $dx
+        $psi.Arguments = '/silent'
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.WindowStyle = 'Hidden'
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $proc.WaitForExit(300000) | Out-Null
+      }
+      $global:LASTEXITCODE = 0
+
+  - !writeStatus: {status: "Installing Brave", option: "browser-brave"}
+
+  - !powerShell:
+    option: "browser-brave"
+    wait: true
+    command: |
+      $dest = Join-Path $env:TEMP 'BraveSetup.exe'
+      $ok = $false
+      try {
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri 'https://laptop-updates.brave.com/latest/winx64' -OutFile $dest -UseBasicParsing -TimeoutSec 180
+        $ok = (Test-Path -LiteralPath $dest) -and ((Get-Item -LiteralPath $dest).Length -gt 0)
+      } catch { $ok = $false }
+      if (-not $ok) {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        $msg = 'EBOS requires an active internet connection to download your selected browser (Brave). Please connect to the internet and run EBOS again.'
+        [System.Windows.Forms.MessageBox]::Show($msg, 'EBOS Cannot Install', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error, [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly) | Out-Null
+        Stop-Process -Name 'AME Beta','AME Wizard Beta','AME','TrustedUninstaller.CLI' -Force -ErrorAction SilentlyContinue
+        $global:LASTEXITCODE = 1
+        exit 1
+      }
+      function Invoke-BrowserSetup {
+        param([string]$Path, [string[]]$ArgList, [string[]]$ProofPaths)
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $Path
+        $psi.Arguments = ($ArgList -join ' ')
+        # ShellExecute so the installer does not inherit this process's
+        # stdout/stderr handles. With inheritance, an installer still
+        # running when we return holds the wizard's output pipe open and
+        # it reports 'Output processing did not finish'.
+        $psi.UseShellExecute = $true
+        $psi.WindowStyle = 'Hidden'
+        try {
+          $proc = [System.Diagnostics.Process]::Start($psi)
+        } catch { return }
+        $deadline = (Get-Date).AddMinutes(10)
+        while ((Get-Date) -lt $deadline) {
+          if ($proc.WaitForExit(2000)) { break }
+          foreach ($proof in $ProofPaths) {
+            if (Test-Path -LiteralPath $proof) {
+              Start-Sleep -Seconds 5
+              return
+            }
+          }
+        }
+        try { if (-not $proc.HasExited) { $proc.Kill() } } catch {}
+      }
+      Invoke-BrowserSetup -Path $dest -ArgList @('/silent','/install') -ProofPaths @(
+        (Join-Path $env:ProgramFiles 'BraveSoftware\Brave-Browser\Application\brave.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'BraveSoftware\Brave-Browser\Application\brave.exe'),
+        (Join-Path $env:LOCALAPPDATA 'BraveSoftware\Brave-Browser\Application\brave.exe')
+      )
+      $global:LASTEXITCODE = 0
+
+  - !writeStatus: {status: "Removing First-Logon Stubs"}
+  - !powerShell:
+    wait: true
+    errorAction: Ignore
+    command: |
+      foreach ($activeSetupRoot in @('HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components','HKLM:\SOFTWARE\Wow6432Node\Microsoft\Active Setup\Installed Components')) {
+        if (-not (Test-Path $activeSetupRoot)) { continue }
+        Get-ChildItem -Path $activeSetupRoot -ErrorAction SilentlyContinue | ForEach-Object {
+          try {
+            $name = (Get-ItemProperty -Path $_.PSPath -Name '(default)' -ErrorAction SilentlyContinue).'(default)'
+            $stub = (Get-ItemProperty -Path $_.PSPath -Name 'StubPath' -ErrorAction SilentlyContinue).StubPath
+            $isVendor = $false
+            if ($name -and $name -match 'MicrosoftEdge|Microsoft Edge|Edge Update|OneDrive|GoogleChrome|Google Chrome|Chrome Update|Mozilla|Firefox') { $isVendor = $true }
+            if ($stub -and $stub -match 'MicrosoftEdge|msedge|OneDrive|GoogleChrome|chrome\.exe|firefox|Mozilla') { $isVendor = $true }
+            if ($isVendor) {
+              if ($stub -and $stub.Length -gt 0) {
+                try { Set-ItemProperty -Path $_.PSPath -Name 'StubPath' -Value '' -Type ExpandString -Force -ErrorAction SilentlyContinue } catch {}
+                try { Remove-ItemProperty -Path $_.PSPath -Name 'StubPath' -Force -ErrorAction SilentlyContinue } catch {}
+              }
+              if ($name -and $name -match 'Firefox|Mozilla|Google Chrome|Microsoft Edge') {
+                try { Remove-Item -Path $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+              }
+            }
+          } catch {}
+        }
+      }
